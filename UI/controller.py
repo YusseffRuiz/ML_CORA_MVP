@@ -7,12 +7,13 @@ from UI.formatters import format_answer, format_error
 from UI.telemetria import TelemetryLogger, SessionMetrics
 
 class AppController:
-    def __init__(self, view, retrieval_module, kb_df,
+    def __init__(self, view, retrieval_module, kb_df, llm_model=None,
                  on_query_start=None, on_query_end=None,
                  telemetry_logger: TelemetryLogger | None = None,
                  session_metrics: SessionMetrics | None = None,
                  kb_version: str = "", model_name: str = ""):
         self.view = view
+        self.llm_model = llm_model
         self.retrieval = retrieval_module
         self.kb_df = kb_df
         self.on_query_start = on_query_start
@@ -138,7 +139,7 @@ class AppController:
         if self.on_query_start:
             self.on_query_start({"query": query, "auto": auto, "filtros": filtros.copy(), "ts": t0})
 
-        worker = AskWorker(self.retrieval, query, filtros, job_id)
+        worker = AskWorker(self.retrieval, self.llm_model, query, filtros, job_id)
 
         def on_ok(resp_dict):
             # si la respuesta no corresponde al job actual, la ignoramos

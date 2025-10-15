@@ -1,14 +1,13 @@
 import torch
-from langchain_huggingface import HuggingFacePipeline
+from langchain_community.llms import CTransformers
 from langchain.prompts import ChatPromptTemplate
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
 
 #################################Augmentation and Generation ##########################
 # Planteamiento del Modelo de LLM
 
 
-class GenerationModule:
-    def __init__(self, model_name, high_gpu=False):
+class GenerationModuleLlama:
+    def __init__(self, model_name, high_gpu=False, configFile = None):
         """
         :param model_name: model name or model path
         :param high_gpu: if gpu has enough power
@@ -20,61 +19,36 @@ class GenerationModule:
         print("CUDA available:", torch.cuda.is_available())
 
         print("Initializing Model ...")
-
-        tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
-
-        # Initialize model
-
-        # Si hay poco poder o nula GPU
-        if not self.high_cpu:
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_use_double_quant=True,
-            )
+        if configFile is None:
+            config = {'max_new_tokens': 256, 'context_length': 1700, 'temperature': 0.35}
         else:
-            bnb_config = None
+            config = configFile
 
-         # Opción A (GPU sobrada): pesos en bf16/fp16
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            quantization_config=bnb_config,  # Disable si usamos una GPU decente
-            dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-            device_map="auto",
-            trust_remote_code=True,
+        self.llm_model = CTransformers(
+            model=model_name,
+            config=config,
+            verbose=True,
         )
+        print("Module Created!")
+    def initialize(self, initial_prompt):
+        self.initial_prompt = initial_prompt
 
-        #Usamos función pipeline de la biblioteca Transformers para generar la respuesta en función del prompt.
-        gen = pipeline(
-            "text-generation",
-            model=self.model,
-            tokenizer=tokenizer,
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-            device_map="auto",
-            # parámetros conservadores para RAG
-            max_new_tokens=150,
-            do_sample=False,         # determinista (evita desvíos)
-            temperature=0.0,
-            return_full_text=False
+
+    def build_llama2_prompt(self, context: str, question: str) -> str:
+        # Plantilla oficial LLaMA-2 chat
+        return (
+            f"[INST] <<SYS>>\n{self.initial_prompt}\n<</SYS>>\n\n"
+            f"# CONTEXTO\n{context}\n\n"
+            f"# PREGUNTA\n{question}\n"
+            "[/INST]"
         )
-
-        print("Generating LLM ...")
-
-        # Adaptador LangChain
-        self.llm = HuggingFacePipeline(pipeline=gen)
-
-
-
-    def create_initial_prompt(self, prompt):
-        # Prompt inicial para evitar alucionaciones y tomar el papel adecuado.
-        # Augmentation Portion
-
-        self.initial_prompt = ChatPromptTemplate.from_template(prompt)
 
     ## Función principal de respuestas interpretadas por el sistema RAG
-    def rag_answer(self, retrieval_module, query: str):
+    def rag_answer(self, query: str, retrieval):
         # Uso de nuestra función ask previamente desarrollada. - Retrieval
-        docs = retrieval_module.ask(query, return_docs=True)
+        resp, docs = retrieval.ask(query, return_docs=True)
+        # print("Respuesta basica: " + str(docs))
+        # print("####################################################")
         if not docs:
             return "No encontré información suficiente en la base."
 
@@ -82,16 +56,15 @@ class GenerationModule:
         context = build_context_from_docs(docs)
 
         # Llamada al LLM con prompt RAG - Augmentation
-        prompt_value = self.initial_prompt.format(context=context, question=query)
+        # prompt_value = initial_promtp.format(context=context, question=query)
+        prompt_value = self.build_llama2_prompt(context=context, question=query)
         # Generation
-        out = self.llm.invoke(prompt_value)
+        out = self.llm_model.invoke(prompt_value)
 
         # Guardrail de salida: validar que cite al menos un ID presente en el contexto
-        ctx_ids = {d.metadata.get("id") for d in docs}
+        # ctx_ids = {d.metadata.get("id") for d in docs}
         out_text = out if isinstance(out, str) else str(out)
-        if not any(idv and idv in out_text for idv in ctx_ids):
-            # Fallback seguro: resume con tu `ask()` clásico
-            resp = retrieval_module.ask(query, top_k=10)
+        if not out_text:
             return resp["answer"]
 
         return out_text.strip()
@@ -105,10 +78,11 @@ def build_context_from_docs(docs):
         snippet = d.page_content
 
         # Recorta un poco por si el chunk es largo (opcional, por seguridad)
-        if len(snippet) > 900:
-            snippet = snippet[:900] + " ..."
+        # if len(snippet) > 900:
+        #     snippet = snippet[:900] + " ..."
 
-        source = f"(Fuente: {m.get('id','?')} — {m.get('municipio','?')}, {m.get('estado','?')})"
+        # source = f"(Fuente: {m.get('id','?')} — {m.get('municipio','?')}, {m.get('estado','?')})"
+        source = f"(Fuente: {m.get('id', '?')} "
         parts.append(f"{snippet}\n{source}")
 
     return "\n---\n".join(parts)

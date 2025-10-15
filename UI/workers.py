@@ -9,9 +9,10 @@ class AskWorkerSignals(QObject):
     error = Signal(str)
 
 class AskWorker(QRunnable):
-    def __init__(self, retrieval, query: str, filtros: dict, job_id: int):
+    def __init__(self, retrieval, query: str, filtros: dict, job_id: int, llm_model=None):
         super().__init__()
         self.retrieval = retrieval
+        self.llm_model = llm_model
         self.query = query
         self.job_id = job_id
         self.filtros = filtros
@@ -20,7 +21,10 @@ class AskWorker(QRunnable):
     @Slot()
     def run(self):
         try:
-            resp = self.retrieval.ask(self.query, filtros=self.filtros, retrieval_mode="similarity")  # Faster
+            if self.llm_model is not None:
+                resp = self.llm_model.rag_answer(self.query, self.retrieval)  # Faster
+            else:
+                resp = self.retrieval.ask(self.query)
             # empaqueta job_id para que el controller sepa si aún es válido
             self.signals.finished.emit({"_job_id": self.job_id, **resp})
         except Exception:
