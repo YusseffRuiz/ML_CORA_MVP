@@ -1,6 +1,5 @@
 import torch
 from langchain_community.llms import CTransformers
-from langchain.prompts import ChatPromptTemplate
 
 #################################Augmentation and Generation ##########################
 # Planteamiento del Modelo de LLM
