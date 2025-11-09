@@ -139,7 +139,8 @@ class AppController:
         if self.on_query_start:
             self.on_query_start({"query": query, "auto": auto, "filtros": filtros.copy(), "ts": t0})
 
-        worker = AskWorker(self.retrieval, self.llm_model, query, filtros, job_id)
+        worker = AskWorker(retrieval=self.retrieval, llm_model=self.llm_model, query=query, filtros=filtros,
+                           job_id=job_id)
 
         def on_ok(resp_dict):
             # si la respuesta no corresponde al job actual, la ignoramos

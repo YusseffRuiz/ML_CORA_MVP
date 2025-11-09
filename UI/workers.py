@@ -26,7 +26,15 @@ class AskWorker(QRunnable):
             else:
                 resp = self.retrieval.ask(self.query)
             # empaqueta job_id para que el controller sepa si aún es válido
-            self.signals.finished.emit({"_job_id": self.job_id, **resp})
+            # --- Normalización robusta ---
+            if isinstance(resp, str):
+                payload = {"_job_id": self.job_id, "answer": resp, "hits": []}
+            elif isinstance(resp, dict):
+                payload = {"_job_id": self.job_id, **resp}
+            else:
+                payload = {"_job_id": self.job_id, "answer": str(resp), "hits": []}
+
+            self.signals.finished.emit(payload)
         except Exception:
             self.signals.error.emit(traceback.format_exc())
 

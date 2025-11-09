@@ -22,19 +22,21 @@ INIT_PROMPT_LLAMA = """
 
 
 def main():
-    load_dotenv(os.path.expanduser("~/Documents/tokens.env"))
+    load_dotenv(os.path.expanduser("Documents/tokens.env"))
     HF_TOKEN = os.getenv("HF_TOKEN")
+
+    print(HF_TOKEN)
 
     EXCEL_PATH = os.path.join("Documents", "medical_life_real.xlsx")
     MODEL_NAME = "jinaai/jina-embeddings-v2-base-es"
     # MODEL_NAME = "intfloat/multilingual-e5-base" # second Option, compare options
 
     retrieval = RetrievalModule(database_path=EXCEL_PATH, hf_token=HF_TOKEN, model_name=MODEL_NAME)
-    retrieval.initialize(load_db=True, path_to_database="kb_faiss_langchain", score_threshold = 0.34, percentile = 0.9)
+    retrieval.initialize(load_db=False, save_db=True, path_to_database="kb_faiss_langchain", score_threshold = 0.34, percentile = 0.9)
     kb_version = getattr(retrieval, "kb_version", "")  # opcional si lo expones
     model_name = getattr(retrieval, "model_name", MODEL_NAME)
 
-    llm_model_file = "llama-2-7b-chat.Q4_K_M.gguf"
+    llm_model_file = "llama-2-7b-chat.Q5_K_M.gguf"
     llm_module = GenerationModuleLlama(llm_model_file)
     llm_module.initialize(initial_prompt=INIT_PROMPT_LLAMA)
 
@@ -56,6 +58,7 @@ def main():
 
     win.show()
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()

@@ -6,12 +6,11 @@ from langchain_community.llms import CTransformers
 
 
 class GenerationModuleLlama:
-    def __init__(self, model_name, high_gpu=False, configFile = None):
+    def __init__(self, model_name, device="cuda" if torch.cuda.is_available() else "cpu", configFile = None):
         """
         :param model_name: model name or model path
         :param high_gpu: if gpu has enough power
         """
-        self.high_cpu = high_gpu
         self.initial_prompt = None
 
         # Verificar GPU
@@ -19,7 +18,7 @@ class GenerationModuleLlama:
 
         print("Initializing Model ...")
         if configFile is None:
-            config = {'max_new_tokens': 256, 'context_length': 1700, 'temperature': 0.35}
+            config = {'max_new_tokens': 512, 'context_length': 2000, 'temperature': 0.45}
         else:
             config = configFile
 
@@ -27,6 +26,7 @@ class GenerationModuleLlama:
             model=model_name,
             config=config,
             verbose=True,
+            device=device,
         )
         print("Module Created!")
     def initialize(self, initial_prompt):

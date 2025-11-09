@@ -3,7 +3,7 @@ import pandas as pd
 import datetime
 from collections import defaultdict
 
-from pydantic_core.core_schema import none_schema
+import torch
 from rapidfuzz import process, fuzz
 from typing import Literal
 
@@ -22,11 +22,12 @@ from RAG_CORE.rag_utils.search_utils import *
 from RAG_CORE.rag_utils.classify_and_separate import parse_comidas_from_row, get_phones
 
 class RetrievalModule:
-    def __init__(self, database_path, hf_token, model_name, origin_sheet="Unidades"):
+    def __init__(self, database_path, hf_token, model_name, origin_sheet="Unidades", device="cuda" if torch.cuda.is_available() else "cpu"):
         self.database_path = database_path
         self.hf_token = hf_token
         self.origin_sheet = origin_sheet
-        self.model_name =  model_name
+        self.model_name = model_name
+        self.device = device
 
         # self.kb_df = self.build_kb() # 1ra version
         self.df = files_utils.load_sheet_by_name(self.database_path, self.origin_sheet)
@@ -56,10 +57,14 @@ class RetrievalModule:
         :param score_treshold: Treshold minimo de confianza
         :param percentile: Quartile de fiabilidad de la respuesta, este para filtrar el score inicial
         """
+
+        model_kwargs = {"device": self.device, "trust_remote_code": True}
+        encode_kwargs = {"normalize_embeddings": False}  # Set to True if normalization is desired
+
         self.embeddings = HuggingFaceEmbeddings(
             model_name=self.model_name,
-            encode_kwargs={"normalize_embeddings": True}
-
+            model_kwargs=model_kwargs,
+            encode_kwargs=encode_kwargs,
         )
 
         self.score_threshold = score_threshold
