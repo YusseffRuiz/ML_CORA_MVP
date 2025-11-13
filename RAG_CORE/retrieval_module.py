@@ -20,6 +20,9 @@ from RAG_CORE import geo_location
 from utils import files_utils
 from RAG_CORE.rag_utils.search_utils import *
 from RAG_CORE.rag_utils.classify_and_separate import parse_comidas_from_row, get_phones
+from RAG_CORE.interpreter.service_interpreter import ServiceInterpreter
+from RAG_CORE.interpreter.location_interpreter import LocationInterpreter
+from RAG_CORE.interpreter.interpreter import Interpreter
 
 class RetrievalModule:
     def __init__(self, database_path, hf_token, model_name, origin_sheet="Unidades", device="cuda" if torch.cuda.is_available() else "cpu"):
@@ -47,6 +50,10 @@ class RetrievalModule:
         self.IDX_BY_MUNI = defaultdict(set)  # (estado_norm, muni_norm) -> set(id)
         self.IDX_BY_SERVICE = defaultdict(set)  # servicio -> set(id)
         self.ID_TO_DOC = {}  # id -> Document
+        # --- Intérpretes de servicio y ubicación ---
+        self.service_interpreter = None
+        self.location_interpreter = None
+        self.interpreter = None
 
 
     def initialize(self, path_to_database="kb_faiss_langchain", save_db = False, load_db = False, score_threshold=0.36, percentile = 0.85):
@@ -107,6 +114,17 @@ class RetrievalModule:
 
         self.by_state, self.all_munis = self.build_geo_lexicons()
         self.docs = docs
+        # --- Intérpretes de servicio y ubicación ---
+        self.service_interpreter = ServiceInterpreter(self.embeddings)
+        self.location_interpreter = LocationInterpreter(
+            geo=self.geo,
+            extract_state_fn=self.extract_state_from_query,
+            extract_muni_fn=self.extract_municipality_from_query,
+        )
+        self.interpreter = Interpreter(
+            service_interpreter=self.service_interpreter,
+            location_interpreter=self.location_interpreter,
+        )
 
     def save_kb(self, db_name="kb_faiss_langchain"):
         self.vectorstore.save_local(db_name)
@@ -355,8 +373,10 @@ class RetrievalModule:
         """
         filtros = filtros or {}
         # 1) Detectar intención básica
-        svc_res = files_utils.resolve_service(query, embeddings_model=self.embeddings)
-        service = svc_res["service"]
+        interp = self.interpreter.parse(query)
+
+        service = interp["service_id"]
+        detected_state = interp["location"]["estado"]
 
         # Si es el nombre de UME, forzar filtro por nombre de la unidad=ume (y NO exigir un servicio concreto)
         if service == "ume_alternativas": # Regresa sin cambios, buscaremos solo UME
@@ -365,11 +385,10 @@ class RetrievalModule:
                 if re.search(r"\b(SOY+\s+TU+\s+SALUD+\s+UNIDAD+\s+M[É|E]DICA+\s+Y+\s+EST[É|E]TICA+)\b", norm_txt(d.metadata.get("nombre_oficial")).upper()):
                     return d, True # UME Flag
 
-        detected_state = self.extract_state_from_query(query)
-        muni_info = self.extract_municipality_from_query(query, detected_state)
+        muni_info = interp["debug"]["geo"]["muni_info"]
 
         # 2) Armar “requested” tolerante (como en ask actual)
-        req_state = filtros.get("estado") or (detected_state.title() if detected_state else "")
+        req_state = filtros.get("estado") or (detected_state if detected_state else "")
         req_muni = filtros.get("municipio") or (
             muni_info.get("municipio") if (muni_info and "municipio" in muni_info) else "")
 
@@ -477,6 +496,15 @@ class RetrievalModule:
             return all(str(meta.get(k, "")).lower() == str(v).lower()
                        for k, v in filtros.items() if v)
 
+        # --- NUEVO: interpretación centralizada de la query ---
+        interp = self.interpreter.parse(query)
+
+        service = interp["service_id"]
+        estado_interp = interp["location"]["estado"]
+        muni_interp = interp["location"]["municipio"]
+
+        print(f"Servicio interpretado: {service} | Estado: {estado_interp} | Municipio: {muni_interp}")
+
         # Path alterno, Fast Path, busqueda rapida sin uso de muchos recursos.
 
         # 0) FAST PATH por metadatos (si habilitado)
@@ -530,11 +558,8 @@ class RetrievalModule:
             resp = {"question": query, "answer": "No encontré resultados.", "hits": []}
             return ret_docs(docs_flag=return_docs, reply=resp, docs=results, max_show=max_to_show)
 
-
         # 3) Filtrar por servicio si corresponde (Filtrado por servicio de la misma query)
-        svc_res = files_utils.resolve_service(query, embeddings_model=self.embeddings)
-        service = svc_res["service"]
-        print("Servicio a dar: " + str(service))
+        print("Servicio a dar (Interpreter): " + str(service))
 
         # Si es el nombre de UME, forzar filtro por nombre de la unidad=ume (y NO exigir un servicio concreto)
         is_ume_intent = service in SERVICE_LEXICON["ume_alternativas"]["syn"]
@@ -574,56 +599,26 @@ class RetrievalModule:
                 results = res_temp
 
         # 4) Filtrar por metadatos exactos (post-filtro)
-        detected_state = self.extract_state_from_query(query)
-        print(detected_state)
+        amb_active = "ambig_state_muni" in interp["flags"]["degradaciones"]
+        amb = interp["debug"]["geo"]["amb"]
 
-        # detectar ambigüedad entre similitud entre municipio-estado ANTES de extraer municipio
-        amb_active = False
-        amb = self.geo.detect_state_muni_ambiguity(q_norm)
+        detected_state = estado_interp
+        muni_info = interp["debug"]["geo"]["muni_info"]
 
-        force_state = None
-        suppress_muni = False
-        if amb:
-            force_state = amb["state"]
-            if not self.geo.has_explicit_muni_marker(q_norm):
-                suppress_muni = True  # por defecto = estado
-                amb_active = True
+        if detected_state and not filtros.get("estado"):
+            filtros["estado"] = detected_state
 
-        # extraer municipio SOLO si no suprimimos
-        muni_info = None
-        if not suppress_muni:
-            muni_info = self.extract_municipality_from_query(query, detected_state)
+        if muni_info and muni_interp:
+            filtros["municipio"] = muni_interp
+            if not filtros.get("estado") and muni_info.get("estado"):
+                filtros["estado"] = muni_info["estado"]
 
-        if force_state:
-            filtros["estado"] = force_state
-        elif detected_state and not filtros.get("estado"):
-            filtros["estado"] = detected_state.title()
-
-        # municipio: solo si NO hay ambigüedad activa o si hubo marcador explícito
-        if muni_info:
-            if "ambiguous" in muni_info:
-                opts = [f"{m} ({e})" for m, e in muni_info["ambiguous"][:5]]
-                resp = {"answer": "¿Te refieres a alguno de estos municipios? " + "; ".join(opts), "hits": []}
-                return ret_docs(docs_flag=return_docs, reply=resp, docs=results, max_show=max_to_show)
-            # si la ambigüedad está activa y el municipio detectado es justamente el homónimo del estado, lo anulamos
-            if amb_active:
-                if _norm_simple(muni_info.get("municipio", "")) == _norm_simple(amb["muni"]) and not self.geo.has_explicit_muni_marker(
-                        q_norm):
-                    # anula municipio para no sobrefiltrar; quedamos en nivel estado
-                    pass
-                else:
-                    filtros["municipio"] = muni_info["municipio"]
-                    if not filtros.get("estado") and muni_info.get("estado"):
-                        filtros["estado"] = muni_info["estado"]
-            else:
-                filtros["municipio"] = muni_info["municipio"]
-                if not filtros.get("estado") and muni_info.get("estado"):
-                    filtros["estado"] = muni_info["estado"]
         if filtros:
             results = [(d, s) for (d, s) in results if ok(d.metadata)]
             if not results:
                 resp = {"question": query, "answer": "No encontré resultados con esos filtros.", "hits": []}
                 return ret_docs(docs_flag=return_docs, reply=resp, docs=results, max_show=max_to_show)
+
         # 5) Percentil dinámico + mínimo absoluto
         # Manejar si son pocos resultados
         n = len(results)
@@ -652,15 +647,20 @@ class RetrievalModule:
 
         kept_sorted = sorted(kept, key=lambda x: x[1], reverse=True)
 
+
         # --- boosts (opcional pero recomendado)
-        requested_state = filtros.get("estado") or (detected_state.title() if detected_state else "")
-        requested_muni = filtros.get("municipio") or (
-            muni_info.get("municipio") if (muni_info and "municipio" in muni_info) else "")
-        state_for_boost = requested_state or (detected_state.title() if detected_state else None)
-        muni_for_boost = requested_muni or (
-            muni_info.get("municipio") if (muni_info and "municipio" in muni_info) else None)
-        kept_sorted = apply_small_boosts(kept_sorted, service=service, state=state_for_boost,
-                                         municipality=muni_for_boost)
+        requested_state = filtros.get("estado") or (detected_state or "")
+        requested_muni = filtros.get("municipio") or (muni_interp or "")
+
+        state_for_boost = requested_state or (detected_state or None)
+        muni_for_boost = requested_muni or (muni_interp or None)
+
+        kept_sorted = apply_small_boosts(
+            kept_sorted,
+            service=service,
+            state=state_for_boost,
+            municipality=muni_for_boost,
+        )
 
         # aplicar reglas de negocio
         enhanced = []
