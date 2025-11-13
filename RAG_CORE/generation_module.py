@@ -1,5 +1,6 @@
 import torch
 from langchain_community.llms import CTransformers
+import os, time
 
 #################################Augmentation and Generation ##########################
 # Planteamiento del Modelo de LLM
@@ -14,21 +15,33 @@ class GenerationModuleLlama:
         self.initial_prompt = None
 
         # Verificar GPU
-        print("CUDA available:", torch.cuda.is_available())
+        if device == "cuda":
+            cuda_available = torch.cuda.is_available()
+            print("CUDA available:", cuda_available)
+        else:
+            cuda_available = False
 
         print("Initializing Model ...")
+        gpu_layers = 0
         if configFile is None:
-            config = {'max_new_tokens': 512, 'context_length': 2000, 'temperature': 0.45}
+            if cuda_available:
+                gpu_layers = 22
+                config = {'max_new_tokens': 400, 'context_length': 1700, 'temperature': 0.45, "gpu_layers": gpu_layers,
+                          "threads": os.cpu_count()}
+            else:
+                config = {'max_new_tokens': 512, 'context_length': 1700, 'temperature': 0.45}
         else:
             config = configFile
 
         self.llm_model = CTransformers(
             model=model_name,
+            model_type="llama",
             config=config,
-            verbose=True,
+            verbose=False,
             device=device,
+            gpu_layers=gpu_layers,
         )
-        print("Module Created!")
+        print(f"Module Created!, gpu layers: {gpu_layers}.")
     def initialize(self, initial_prompt):
         self.initial_prompt = initial_prompt
 
@@ -47,19 +60,23 @@ class GenerationModuleLlama:
         # Uso de nuestra función ask previamente desarrollada. - Retrieval
         resp, docs = retrieval.ask(query, return_docs=True)
         # print("Respuesta basica: " + str(docs))
-        # print("####################################################")
+        print("####################################################")
         if not docs:
             return "No encontré información suficiente en la base."
 
         # Armar contexto a partir de nuestro doc creado
         context = build_context_from_docs(docs)
-
+        print("Finished Context")
         # Llamada al LLM con prompt RAG - Augmentation
         # prompt_value = initial_promtp.format(context=context, question=query)
         prompt_value = self.build_llama2_prompt(context=context, question=query)
         # Generation
+        t0 = time.perf_counter()
         out = self.llm_model.invoke(prompt_value)
+        t1 = time.perf_counter()
 
+        print("Finished invoke, time: ", t1 - t0, " s")
+        return out
         # Guardrail de salida: validar que cite al menos un ID presente en el contexto
         # ctx_ids = {d.metadata.get("id") for d in docs}
         out_text = out if isinstance(out, str) else str(out)

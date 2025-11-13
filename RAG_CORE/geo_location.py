@@ -1,4 +1,3 @@
-import re
 from typing import Dict, List, Tuple, Optional
 from rapidfuzz import process, fuzz
 
