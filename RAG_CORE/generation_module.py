@@ -60,15 +60,6 @@ class GenerationModuleLlama:
                          use_mlock=True,
                          verbose=False
                          )
-
-        # self.llm_model = CTransformers(
-        #     model=model_name,
-        #     model_type="llama",
-        #     config=config,
-        #     verbose=False,
-        #     device=device,
-        #     gpu_layers=gpu_layers,
-        # )
         print(f"Module Created!, gpu layers: {gpu_layers}.")
     def initialize(self, initial_prompt):
         self.initial_prompt = initial_prompt
@@ -76,8 +67,6 @@ class GenerationModuleLlama:
 
     def build_llama2_prompt(self, context: str, question: str) -> str:
         # Plantilla oficial LLaMA-2 chat
-        # print("Tokens in prompt: ", count_tokens(self.initial_prompt))
-        # print("Tokens in context: ", count_tokens(context))
         return (
             f"[INST] <<SYS>>\n{self.initial_prompt.strip()}\n<</SYS>>\n\n"
             f"# CONTEXTO\n{context.strip()}\n\n"
@@ -86,7 +75,7 @@ class GenerationModuleLlama:
 
 
     ## Función principal de respuestas interpretadas por el sistema RAG
-    def rag_answer(self, query: str, retrieval):
+    def rag_answer(self, query: str, retrieval, debug : bool = False):
         # Uso de nuestra función ask previamente desarrollada. - Retrieval
         resp, docs = retrieval.ask(query, return_docs=True)
         # print("Respuesta basica: " + str(docs))
@@ -96,15 +85,14 @@ class GenerationModuleLlama:
 
         # Armar contexto a partir de nuestro doc creado
         context = build_context_from_docs(docs)
-        # print(context)
 
         # Llamada al LLM con prompt RAG - Augmentation
         # prompt_value = initial_promtp.format(context=context, question=query)
         prompt_value = self.build_llama2_prompt(context=context, question=query)
-        print("Finished Context, tokens number: ", count_tokens(prompt_value))
+        if debug:
+            print("Finished Context, tokens number: ", count_tokens(prompt_value))
         # Generation
         t0 = time.perf_counter()
-        # out = self.llm_model.invoke(prompt_value)
         out = self.llm_model(
             prompt=prompt_value,
             stop=["</s>"],
@@ -114,10 +102,12 @@ class GenerationModuleLlama:
         )
         t1 = time.perf_counter()
 
-        print("Finished invoke, time: ", t1 - t0, " s")
-        print("Prompt completo:\n", prompt_value)
-        print("Respuesta tokens:", len(out["choices"][0]["text"].split()))
-        print("Respuesta completa:\n", out["choices"][0]["text"])
+        ## Debugging
+        if debug:
+            print("Finished invoke, time: ", t1 - t0, " s")
+            print("Prompt completo:\n", prompt_value)
+            print("Respuesta tokens:", len(out["choices"][0]["text"].split()))
+            print("Respuesta completa:\n", out["choices"][0]["text"])
 
         out_text = out["choices"][0]["text"].strip() if isinstance(out, dict) else str(out)
 
