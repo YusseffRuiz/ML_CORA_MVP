@@ -203,6 +203,11 @@ def short_hash(*parts: str, length: int = 8) -> str:
     return h[:length]
 
 def make_canonical_id(nombre_unidad: str, direccion: str) -> str:
+    """
+    IMPORTANTE: Actualmente el ID canonico se realiza por medio de "nombre de unidad + direccion + hash de 8 digitos.
+    En el futuro, si se desea integrar con otros sistemas, puede usarse un ID tipo UUID v4 o si el sistema crece,
+    aumentar el numero de hash a 9.
+    """
     s = slugify(nombre_unidad)
     h = short_hash(nombre_unidad, direccion, length=8)
     return f"{s}-{h}"

@@ -4,6 +4,7 @@ import datetime
 from collections import defaultdict
 
 import torch
+from rank_bm25 import BM25Okapi
 from rapidfuzz import process, fuzz
 from typing import Literal
 
@@ -54,6 +55,11 @@ class RetrievalModule:
         self.service_interpreter = None
         self.location_interpreter = None
         self.interpreter = None
+
+        # --- BM25 / híbrido ---
+        self.bm25 = None
+        self._bm25_corpus_tokens = []
+        self._bm25_ids = []
 
 
     def initialize(self, path_to_database="kb_faiss_langchain", save_db = False, load_db = False, score_threshold=0.36, percentile = 0.85):
@@ -126,6 +132,13 @@ class RetrievalModule:
             location_interpreter=self.location_interpreter,
         )
 
+        # índices por metadatos (fast_path)
+        self._build_metadata_indexes()
+
+        # índice BM25 sobre searchable_text
+        self._build_bm25_index()
+
+
     def save_kb(self, db_name="kb_faiss_langchain"):
         self.vectorstore.save_local(db_name)
 
@@ -148,6 +161,101 @@ class RetrievalModule:
                 self.IDX_BY_STATE[st].add(mid)
                 if mu:
                     self.IDX_BY_MUNI[(st, mu)].add(mid)
+
+    def _build_bm25_index(self):
+        """
+        Construye un índice BM25 sobre la columna `searchable_text` de kb_df.
+        Usamos el id canónico como ancla para mapear de vuelta a Document.
+        """
+        if self.kb_df is None or "searchable_text" not in self.kb_df.columns:
+            return
+
+        texts = self.kb_df["searchable_text"].fillna("").astype(str).tolist()
+        ids = self.kb_df["id"].astype(str).tolist()
+
+        corpus_tokens = [norm_txt(t).split() for t in texts]
+
+        self._bm25_corpus_tokens = corpus_tokens
+        self._bm25_ids = ids
+        self.bm25 = BM25Okapi(corpus_tokens)
+
+    def _bm25_search(self, query: str, k: int = 40):
+        """
+        Ejecuta búsqueda BM25 en searchable_text.
+        Devuelve list[(Document, score_float)] ordenada desc.
+        """
+        if self.bm25 is None:
+            return []
+
+        tokens = norm_txt(query).split()
+        if not tokens:
+            return []
+
+        scores = self.bm25.get_scores(tokens)
+        scores = np.array(scores, dtype=float)
+
+        # índices ordenados por score desc
+        idx_sorted = np.argsort(scores)[::-1][:k]
+
+        results = []
+        for idx in idx_sorted:
+            s = float(scores[idx])
+            if s <= 0:
+                continue
+            mid = self._bm25_ids[idx]
+            d = self.ID_TO_DOC.get(mid)
+            if d is None:
+                continue
+            results.append((d, s))
+
+        return results
+
+    def _hybrid_fusion_rrf(
+        self,
+        vec_results: list[tuple[Document, float]],
+        bm25_results: list[tuple[Document, float]],
+        k_out: int = 40,
+        alpha: float = 0.5,
+        k_rrf: int = 60,
+    ):
+        """
+        Fusión híbrida BM25 + vector mediante Reciprocal Rank Fusion.
+
+        alpha ~ peso de BM25 vs vector:
+          - alpha = 0.5 -> ambos igual
+          - alpha > 0.5 -> favorece BM25
+        """
+        # map: id -> rank
+        def to_rank_map(results):
+            rank_map = {}
+            for rank, (d, _) in enumerate(results, start=1):
+                mid = str(d.metadata.get("id") or d.metadata.get("nombre_oficial") or id(d))
+                if mid not in rank_map:
+                    rank_map[mid] = rank
+            return rank_map
+
+        r_vec = to_rank_map(vec_results)
+        r_bm  = to_rank_map(bm25_results)
+
+        all_ids = set(r_vec.keys()) | set(r_bm.keys())
+        fused = []
+
+        for mid in all_ids:
+            d = self.ID_TO_DOC.get(mid)
+            if d is None:
+                continue
+
+            score = 0.0
+            if mid in r_vec:
+                score += (1.0 - alpha) / (k_rrf + r_vec[mid])
+            if mid in r_bm:
+                score += alpha / (k_rrf + r_bm[mid])
+
+            fused.append((d, score))
+
+        fused.sort(key=lambda x: x[1], reverse=True)
+        return fused[:k_out]
+
 
     def rows_to_documents_unidades(self, geolocation):
         df_geo = _finalize_geo(self.df, geolocation, min_state=60, min_muni=60)
@@ -214,7 +322,7 @@ class RetrievalModule:
                 f"servicios: {', '.join(servicios)}"
                 f"ubicacion: {municipio}, {estado}"
                 # f"tipo: {programa}"
-                f"direccion: {direccion}"
+                # f"direccion: {direccion}"
                 # f"horario: {horarios_txt}
                 # f"tel: {telefono_display}"
                 # f"referencias: {referencias}"
@@ -450,7 +558,9 @@ class RetrievalModule:
             max_to_show: int = 10,
             require_margin: float | None = 0.06,  # diferencia top1-top2; None para desactivar
             return_docs: bool = False,
-            retrieval_mode: Literal["similarity","mmr"] = "mmr", # (Opcional: Especificar el tipo de retriever)
+            retrieval_mode: Literal["similarity","mmr", "bm25","hybrid"] = "hybrid", # (Opcional: Especificar el tipo de retriever)
+            # Puede ser: mmr, similarity, bm25, hybrid
+            hybrid_alpha: float = 0.6,
             ):
         """
         - Recupera k*2 candidatos de FAISS (LangChain).
@@ -469,7 +579,7 @@ class RetrievalModule:
 
         def get_line_output(meta):
             line = (
-                f"• {meta['id']} — {meta['municipio']}, {meta['estado']} | {meta['direccion_corta']} | "
+                f"• {meta['id']} — {meta['municipio']}, {meta['estado']} "#| {meta['direccion_corta']} | "
                  # f"Horario: {meta['horarios_texto']}"#| Tel: {meta['telefono']} | "
                 # f"Horario de Comidas: {m['comidas']} | "
                 f"Servicios: {', '.join(meta.get('servicios_lista', [])) or 'Consultar en sede'} | "
@@ -498,16 +608,17 @@ class RetrievalModule:
 
         # --- NUEVO: interpretación centralizada de la query ---
         interp = self.interpreter.parse(query)
+        # print(interp)
 
         service = interp["service_id"]
         estado_interp = interp["location"]["estado"]
         muni_interp = interp["location"]["municipio"]
 
-        print(f"Servicio interpretado: {service} | Estado: {estado_interp} | Municipio: {muni_interp}")
+        # print(f"Servicio interpretado: {service} | Estado: {estado_interp} | Municipio: {muni_interp}")
 
         # Path alterno, Fast Path, busqueda rapida sin uso de muchos recursos.
 
-        # 0) FAST PATH por metadatos (si habilitado)
+        # 1) FAST PATH por metadatos (si habilitado)
         if self.fast_path:
             fast_docs, ume_flag = self.fast_filter_by_metadata(query, filtros, N_min=3, N_max=max_to_show * 2)
             if fast_docs:
@@ -528,7 +639,8 @@ class RetrievalModule:
                 for d in fast_docs[:max_to_show]:
                     m = {"metadata": d.metadata.copy()}
                     m["metadata"] = apply_business_rules(m)
-                    enhanced.append((m["metadata"], m["score"]))
+                    # enhanced.append((m["metadata"], m["score"]))
+                    enhanced.append(m["metadata"])
 
                 lines = []
                 for m in enhanced:
@@ -539,27 +651,62 @@ class RetrievalModule:
                 resp = {"question": query,
                         "answer": answer,
                         "hits": [{"metadata": d} for d, _ in fast_docs[:max_to_show]]}
+                        # "hits": [{"metadata": d} for d in fast_docs[:max_to_show]]}
                 return ret_docs(docs_flag=return_docs, reply=resp, docs=fast_docs, max_show=max_to_show)
 
         # 2) Recuperar más (3 veces top_k) de lo necesario para filtrar
-        if retrieval_mode == "similarity":
-            results = self.vectorstore.similarity_search_with_score(q, k=max(40, top_k*3))
-            # results: list[(Document, score_float)]
+        vec_results = []
+        bm25_results = []
+
+        # --- Vectorial (FAISS + embeddings) ---
+        if retrieval_mode in ("similarity", "mmr", "hybrid"):
+            if retrieval_mode == "similarity" or retrieval_mode == "hybrid":
+                vec_results = self.vectorstore.similarity_search_with_score(
+                    q, k=max(40, top_k * 3)
+                )
+            else:  # "mmr" o "hybrid"
+                mmr_docs = self.vectorstore.max_marginal_relevance_search(
+                    q,
+                    k=top_k,
+                    fetch_k=max(40, top_k * 3),
+                    lambda_mult=0.7,
+                )
+                if not mmr_docs and retrieval_mode != "hybrid":
+                    resp = {"question": query, "answer": "No encontré resultados.", "hits": []}
+                    return ret_docs(docs_flag=return_docs, reply=resp, docs=mmr_docs, max_show=max_to_show)
+
+                if mmr_docs:
+                    vec_results = _rescore_docs_with_query(self.embeddings, q, mmr_docs)
+
+        # --- BM25 puro ---
+        if retrieval_mode in ("bm25", "hybrid"):
+            bm25_results = self._bm25_search(query, k=max(40, top_k * 3))
+
+        # --- Seleccionar / fusionar resultados según modo ---
+        if retrieval_mode == "similarity" or retrieval_mode == "mmr":
+            results = vec_results
+        elif retrieval_mode == "bm25":
+            results = bm25_results
+        elif retrieval_mode == "hybrid":
+            # si uno de los dos viene vacío, usar el que sí tenga datos
+            if vec_results and bm25_results:
+                results = self._hybrid_fusion_rrf(
+                    vec_results=vec_results,
+                    bm25_results=bm25_results,
+                    k_out=max(40, top_k * 3),
+                    alpha=hybrid_alpha,
+                )
+            else:
+                results = vec_results or bm25_results
         else:
-            # Devuelve solo Documents (sin score)
-            mmr_docs = self.vectorstore.max_marginal_relevance_search(q, k=top_k, fetch_k = max(40, top_k*3),
-                                                                      lambda_mult=0.7)
-            if not mmr_docs:
-                resp = {"question": query, "answer": "No encontré resultados.", "hits": []}
-                return ret_docs(docs_flag=return_docs, reply=resp, docs=mmr_docs, max_show=max_to_show)
-            # Re-score con el mismo modelo de embeddings que usa el vectorstore
-            results = _rescore_docs_with_query(self.embeddings, q, mmr_docs)
+            results = []
+
         if not results:
             resp = {"question": query, "answer": "No encontré resultados.", "hits": []}
             return ret_docs(docs_flag=return_docs, reply=resp, docs=results, max_show=max_to_show)
 
         # 3) Filtrar por servicio si corresponde (Filtrado por servicio de la misma query)
-        print("Servicio a dar (Interpreter): " + str(service))
+        # print("Servicio a dar (Interpreter): " + str(service))
 
         # Si es el nombre de UME, forzar filtro por nombre de la unidad=ume (y NO exigir un servicio concreto)
         is_ume_intent = service in SERVICE_LEXICON["ume_alternativas"]["syn"]
@@ -624,28 +771,32 @@ class RetrievalModule:
         n = len(results)
         scores = np.array([s for _, s in results], dtype=float)
 
-        if n <= 5:
-            relaxed_min = max(0.36, self.score_threshold - 0.07)
-            threshold = max(relaxed_min, self.score_threshold)
-            kept = [(d, s) for (d, s) in results if s >= relaxed_min]
+        if retrieval_mode in ("bm25", "hybrid"):
+            kept_sorted = sorted(results, key=lambda x: x[1], reverse=True)
+            threshold = 0.0
         else:
-            perc_cut = float(np.quantile(scores, self.percentile))
-            threshold = max(perc_cut, self.score_threshold)
-            kept = [(d, s) for (d, s) in results if s >= threshold]
-        if not kept:
-            fallback = float(np.quantile(scores, 0.60)) if len(scores) else self.score_threshold
-            threshold2 = max(fallback, self.score_threshold)
-            kept = [(d, s) for (d, s) in results if s >= threshold2]
+            if n <= 5:
+                relaxed_min = max(0.36, self.score_threshold - 0.07)
+                threshold = max(relaxed_min, self.score_threshold)
+                kept = [(d, s) for (d, s) in results if s >= relaxed_min]
+            else:
+                perc_cut = float(np.quantile(scores, self.percentile))
+                threshold = max(perc_cut, self.score_threshold)
+                kept = [(d, s) for (d, s) in results if s >= threshold]
             if not kept:
+                fallback = float(np.quantile(scores, 0.60)) if len(scores) else self.score_threshold
+                threshold2 = max(fallback, self.score_threshold)
+                kept = [(d, s) for (d, s) in results if s >= threshold2]
+                if not kept:
+                    resp = {"question": query, "answer": "No encontré resultados con suficiente confianza.", "hits": []}
+                    return ret_docs(docs_flag=return_docs, reply=resp, docs=kept, max_show=max_to_show)
+
+            if not kept:
+                # si quedó vacío, relajar un poco al percentil 0.5 como fallback
                 resp = {"question": query, "answer": "No encontré resultados con suficiente confianza.", "hits": []}
                 return ret_docs(docs_flag=return_docs, reply=resp, docs=kept, max_show=max_to_show)
 
-        if not kept:
-            # si quedó vacío, relajar un poco al percentil 0.5 como fallback
-            resp = {"question": query, "answer": "No encontré resultados con suficiente confianza.", "hits": []}
-            return ret_docs(docs_flag=return_docs, reply=resp, docs=kept, max_show=max_to_show)
-
-        kept_sorted = sorted(kept, key=lambda x: x[1], reverse=True)
+            kept_sorted = sorted(kept, key=lambda x: x[1], reverse=True)
 
 
         # --- boosts (opcional pero recomendado)

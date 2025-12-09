@@ -36,9 +36,10 @@ def main():
     kb_version = getattr(retrieval, "kb_version", "")  # opcional si lo expones
     model_name = getattr(retrieval, "model_name", MODEL_NAME)
 
-    llm_model_file = "llama-2-7b-chat.Q5_K_M.gguf"
-    llm_module = GenerationModuleLlama(llm_model_file)
-    llm_module.initialize(initial_prompt=INIT_PROMPT_LLAMA)
+    llm_model_file = "../HF_Agents/llama-2-7b-chat.Q4_K_M.gguf"
+    # llm_module = GenerationModuleLlama(llm_model_file)
+    llm_module = None
+    # llm_module.initialize(initial_prompt=INIT_PROMPT_LLAMA)
 
     # Telemetría
     os.makedirs("logs", exist_ok=True)

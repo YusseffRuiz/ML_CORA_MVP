@@ -24,7 +24,9 @@ class AskWorker(QRunnable):
             if self.llm_model is not None:
                 resp = self.llm_model.rag_answer(self.query, self.retrieval)  # Faster
             else:
+                print("Comenzamos pregunta: ", self.query)
                 resp = self.retrieval.ask(self.query)
+                print("Respuesta: ", resp)
             # empaqueta job_id para que el controller sepa si aún es válido
             # --- Normalización robusta ---
             if isinstance(resp, str):
@@ -33,7 +35,7 @@ class AskWorker(QRunnable):
                 payload = {"_job_id": self.job_id, **resp}
             else:
                 payload = {"_job_id": self.job_id, "answer": str(resp), "hits": []}
-
+            print("Emitting Payload: ", payload)
             self.signals.finished.emit(payload)
         except Exception:
             self.signals.error.emit(traceback.format_exc())

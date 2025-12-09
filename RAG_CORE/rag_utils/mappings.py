@@ -185,12 +185,12 @@ SERVICE_LEXICON = { # Mas complejo para las query
 
   "consulta_general": {
     "syn": [
-      "consulta general","medico general","médico general","chequeo general",
+      "consulta general","medico general","médico general","chequeo general", "doctor general"
       "revisión general","revision general","consulta con doctor","cita con doctor",
       "consulta médica","atencion medica","atención médica","primer contacto", "consulta medica",
         "medicos", "doctores", "revision general", "revision", "medico"
     ],
-    "re":  [r"\b(consulta|chequeo|revisi[óo]n)\s+general\b", r"\bm[ée]dic[oa]\s+general\b"],
+    "re":  [r"\b(consulta|chequeo|revisi[óo]n)\s+general\b", r"(\b(m[ée]dic[oa])|doctor)\s+general\b"],
     "desc": "Consulta médica de primer contacto y valoración general."
   },
 
@@ -216,9 +216,10 @@ SERVICE_LEXICON = { # Mas complejo para las query
   "optometrista": {
     "syn": [
       "optometrista","optometria","óptica","optica","lentes","graduacion de lentes",
-      "examen de la vista","ojos","ver borroso","anteojos","armazon","montura", "lentes", "vista", "optometristas"
+      "examen de la vista","ojos","ver borroso","anteojos","armazon","montura", "lentes", "vista", "optometristas",
+        "micas"
     ],
-    "re":  [r"\b(optometr(ist(a|as)|ia)|[óo]ptic(a|as)|lentes|graduaci[óo]n|examen\s+de\s+la\s+vista)\b"],
+    "re":  [r"\b(optometr(ist(a|as)|ia)|[óo]ptic(a|as)|lentes|graduaci[óo]n|examen\s+de\s+la\s+vista|cambiar\s+micas)\b"],
     "desc": "Evaluación visual y graduación de lentes (óptica)."
   },
 
@@ -233,11 +234,11 @@ SERVICE_LEXICON = { # Mas complejo para las query
 
   "psicologia": {
     "syn": [
-      "psicologia","psicología","psicologo","psicólogo","emocional",
+      "psicologia","psicología","psicologo","psicólogo","emocional", "psicológica"
       "ansiedad","estrés","estres","depresion","depresión","salud mental", "psicologos",
         "psicologas", "psicologa"
     ],
-    "re":  [r"\b(psicol(og[ií]a|ogo|oga|ogos|ogas)|ansiedad|estr[ée]s|depresi[óo]n)\b"],
+    "re":  [r"\b(psicol(og[ií]a|ogo|oga|ogos|ogas)|ansiedad|estr[ée]s|depresi[óo]n|psicol[ó|o]gica)\b"],
     "desc": "Atención psicológica y terapia."
   },
 
@@ -271,9 +272,9 @@ SERVICE_LEXICON = { # Mas complejo para las query
   "farmacia": {
     "syn": [
       "medicamentos","farmacia","surtir receta","botiquin","botiquín","receta",
-      "entrega de medicamentos", "farmacias"
+      "entrega de medicamentos", "farmacias", "medicinas", "medicina"
     ],
-    "re":  [r"\b(medicamentos|farmacia|botiqu[ií]n|receta)\b"],
+    "re":  [r"\b(medicamentos|farmacia|botiqu[ií]n|receta|venta\s+de\s+medicinas)\b"],
     "desc": "Surtido/entrega de medicamentos."
   },
 
