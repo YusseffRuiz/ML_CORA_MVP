@@ -303,13 +303,13 @@ class RetrievalModule:
                 "estado": estado,
                 "municipio": municipio,
                 "direccion_corta": direccion,
-                # "horarios_texto": horarios_txt,
-                # "comidas" : comidas if comidas else None,
-                # "telefono": telefono_display,
+                "horarios_texto": horarios_txt,
+                "comidas" : comidas if comidas else None,
+                "telefono": telefono_display,
                 "servicios_lista": servicios,
-                # "informacion_adicional": info_extra,
-                # "datos_extras_medicos": extra_med_info,
-                # "referencias_unidad": referencias,
+                "informacion_adicional": info_extra,
+                "datos_extras_medicos": extra_med_info,
+                "referencias_unidad": referencias,
                 # "fuente": f"{self.database_path}:Sheet1:{self.origin_sheet}",
                 # "ultima_actualizacion": today, "tenant": "ML-base",
             }
@@ -322,10 +322,10 @@ class RetrievalModule:
                 f"servicios: {', '.join(servicios)}"
                 f"ubicacion: {municipio}, {estado}"
                 # f"tipo: {programa}"
-                # f"direccion: {direccion}"
-                # f"horario: {horarios_txt}
-                # f"tel: {telefono_display}"
-                # f"referencias: {referencias}"
+                f"direccion: {direccion}"
+                f"horario: {horarios_txt}"
+                f"tel: {telefono_display}"
+                f"referencias: {referencias}"
             )
 
             meta = {
@@ -335,12 +335,12 @@ class RetrievalModule:
                 "estado": estado,
                 "municipio": municipio,
                 "direccion_corta": direccion,
-                # "horarios_texto": horarios_txt,
-                # "comidas" : comidas if comidas else None,
-                # "telefono": telefono_display,
+                "horarios_texto": horarios_txt,
+                "comidas" : comidas if comidas else None,
+                "telefono": telefono_display,
                 "servicios_lista": servicios,
-                # "informacion_adicional": info_extra,
-                # "datos_extras_medicos": extra_med_info,
+                "informacion_adicional": info_extra,
+                "datos_extras_medicos": extra_med_info,
                 # "referencias_unidad": referencias,
             }
 
@@ -561,6 +561,7 @@ class RetrievalModule:
             retrieval_mode: Literal["similarity","mmr", "bm25","hybrid"] = "hybrid", # (Opcional: Especificar el tipo de retriever)
             # Puede ser: mmr, similarity, bm25, hybrid
             hybrid_alpha: float = 0.6,
+            memoria=None
             ):
         """
         - Recupera k*2 candidatos de FAISS (LangChain).
@@ -571,21 +572,15 @@ class RetrievalModule:
           d) (Opcional) chequeo de margen top1-top2.
         - Devuelve lista de hasta max_to_show resultados formateados.
         """
-        filtros = filtros or {}
-
-        # 1) Normalizar query para e5
-        q = normalize_query_e5(query)
-        q_norm = _norm_simple(query)
-
         def get_line_output(meta):
             line = (
-                f"• {meta['id']} — {meta['municipio']}, {meta['estado']} "#| {meta['direccion_corta']} | "
-                 # f"Horario: {meta['horarios_texto']}"#| Tel: {meta['telefono']} | "
-                # f"Horario de Comidas: {m['comidas']} | "
+                f"• {meta['id']} — {meta['municipio']}, {meta['estado']} | {meta['direccion_corta']} | "
+                f"Horario: {meta['horarios_texto']} | Tel: {meta['telefono']} | "
+                f"Horario de Comidas: {meta['comidas']} | "
                 f"Servicios: {', '.join(meta.get('servicios_lista', [])) or 'Consultar en sede'} | "
-                # f"Consulta: {m.get('costo_consulta') or 'Consultar en sede'} | "
-                # f"Medicamentos: {m.get('costo_medicamentos') or 'Consultar en sede'} "
-                # f"Datos sobre los médicos extra: {m.get('datos_extras_medicos')}"
+                f"Consulta: {meta.get('costo_consulta') or 'Consultar en sede'} | "
+                f"Medicamentos: {meta.get('costo_medicamentos') or 'Consultar en sede'} "
+                f"Datos sobre los médicos extra: {meta.get('datos_extras_medicos')}"
             )
             if meta.get("nota_regla"):
                 line += f" — {meta['nota_regla']}"
@@ -606,7 +601,27 @@ class RetrievalModule:
             return all(str(meta.get(k, "")).lower() == str(v).lower()
                        for k, v in filtros.items() if v)
 
-        # --- NUEVO: interpretación centralizada de la query ---
+        filtros = filtros or {}
+
+        if memoria:
+            last_docs = memoria.get_last_docs()
+            print(last_docs)
+            if last_docs:
+                rescored = _rescore_docs_with_query(self.embeddings, normalize_query_e5(query), last_docs)
+                rescored_sorted = sorted(rescored, key=lambda x: x[1], reverse=True)
+
+                # Aplica reglas y formato
+                docs = rescored_sorted[:max_to_show]
+                formatted = [get_line_output(d.metadata) for d, _ in docs]
+                answer = "\n".join(formatted)
+
+                resp = {"question": query, "answer": answer, "hits": [{"metadata": d.metadata} for d, _ in docs]}
+                return (resp, [d for d, _ in docs]) if return_docs else resp
+
+        # 1) Normalizar query para e5
+        q = normalize_query_e5(query)
+        q_norm = _norm_simple(query)
+
         interp = self.interpreter.parse(query)
         # print(interp)
 
@@ -630,10 +645,7 @@ class RetrievalModule:
                     resp = {"question": query,
                             "answer": answer,
                             "hits": [{"metadata": fast_docs.metadata}]}
-                    if return_docs:
-                        return resp, fast_docs
-                    else:
-                        return resp
+                    return (resp, fast_docs) if return_docs else resp
                 # Desde aquí puedes saltarte el vector percentile/threshold y formatear de una vez:
                 enhanced = []
                 for d in fast_docs[:max_to_show]:
@@ -642,9 +654,7 @@ class RetrievalModule:
                     # enhanced.append((m["metadata"], m["score"]))
                     enhanced.append(m["metadata"])
 
-                lines = []
-                for m in enhanced:
-                    lines.append(get_line_output(m))
+                lines = [get_line_output(m) for m in enhanced]
 
                 header = "Opciones encontradas (vía búsqueda rápida por metadatos):"
                 answer = header + "\n" + "\n".join(lines)
@@ -662,15 +672,10 @@ class RetrievalModule:
         if retrieval_mode in ("similarity", "mmr", "hybrid"):
             if retrieval_mode == "similarity" or retrieval_mode == "hybrid":
                 vec_results = self.vectorstore.similarity_search_with_score(
-                    q, k=max(40, top_k * 3)
-                )
+                    q, k=max(40, top_k * 3))
             else:  # "mmr" o "hybrid"
                 mmr_docs = self.vectorstore.max_marginal_relevance_search(
-                    q,
-                    k=top_k,
-                    fetch_k=max(40, top_k * 3),
-                    lambda_mult=0.7,
-                )
+                    q, k=top_k, fetch_k=max(40, top_k * 3), lambda_mult=0.7,)
                 if not mmr_docs and retrieval_mode != "hybrid":
                     resp = {"question": query, "answer": "No encontré resultados.", "hits": []}
                     return ret_docs(docs_flag=return_docs, reply=resp, docs=mmr_docs, max_show=max_to_show)
@@ -689,15 +694,12 @@ class RetrievalModule:
             results = bm25_results
         elif retrieval_mode == "hybrid":
             # si uno de los dos viene vacío, usar el que sí tenga datos
-            if vec_results and bm25_results:
-                results = self._hybrid_fusion_rrf(
-                    vec_results=vec_results,
-                    bm25_results=bm25_results,
-                    k_out=max(40, top_k * 3),
-                    alpha=hybrid_alpha,
-                )
-            else:
-                results = vec_results or bm25_results
+            results = self._hybrid_fusion_rrf(
+                vec_results=vec_results,
+                bm25_results=bm25_results,
+                k_out=max(40, top_k * 3),
+                alpha=hybrid_alpha,
+            ) if vec_results and bm25_results else vec_results or bm25_results
         else:
             results = []
 
@@ -728,22 +730,13 @@ class RetrievalModule:
                     "answer": answer,
                     "hits": [{"metadata": d.metadata, "score": 100} for d in ume_docs]}
 
-            if return_docs:
-                return resp, ume_docs
-            else:
-                return resp
+            return (resp, ume_docs) if return_docs else resp
 
         if service:
-            res_temp = []
-            for (d, s) in results:
-                if service in (d.metadata.get("servicios_lista")):
-                    res_temp.append((d, s))
-            if not res_temp:
-                resp = {"question": query, "answer": f"No encontré sedes con el servicio solicitado ({service}).",
-                        "hits": []}
-                return ret_docs(docs_flag=return_docs, reply=resp, docs=res_temp, max_show=max_to_show)
-            else:
-                results = res_temp
+            results = [(d, s) for (d, s) in results if service in (d.metadata.get("servicios_lista"))]
+            if not results:
+                resp = {"question": query, "answer": f"No encontré sedes con el servicio solicitado ({service}).", "hits": []}
+                return ret_docs(docs_flag=return_docs, reply=resp, docs=results, max_show=max_to_show)
 
         # 4) Filtrar por metadatos exactos (post-filtro)
         amb_active = "ambig_state_muni" in interp["flags"]["degradaciones"]
@@ -841,10 +834,7 @@ class RetrievalModule:
         #     else:
         #         degradation_note = " (relajé filtros para no dejarte sin opciones)."
 
-        lines = []
-        for m, _ in enhanced[:max_to_show]:
-            lines.append(get_line_output(m))
-
+        lines = [get_line_output(m) for m, _ in enhanced[:max_to_show]]
         # Output del sistema.
 
         #header = f"Opciones encontradas (umbral={threshold:.2f}, percentil={percentile * 100:.0f}%){degradation_note}:"
@@ -864,8 +854,8 @@ def build_searchable_text(row: dict) -> str:
         # row["programa"],
         f"{row['municipio']}, {row['estado']}",
         row["direccion_corta"],
-        # f"horario: {row['horarios_texto']}",
-        # f"tel: {row['telefono']}",
+        f"horario: {row['horarios_texto']}",
+        f"tel: {row['telefono']}",
         "servicios: " + ", ".join(row["servicios_lista"])
     ]))
 
