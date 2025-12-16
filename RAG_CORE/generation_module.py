@@ -2,7 +2,7 @@ import re
 
 import tiktoken
 import torch
-from langchain.schema import Document
+from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 # from langchain_community.llms import CTransformers
 from llama_cpp import Llama
@@ -252,6 +252,7 @@ class GenerationModuleLlama:
 
     Estilo:
     - Español neutro, respuesta clara y breve (4-6 líneas).
+    - Tu respuesta debes escribirla solamente con letras, sin guiones o identificador, los números expresados con palabras.
     - NO te presentes. NO saludes. Inicia con una frase de confirmación como "claro!" y ve directo a los datos.
     - Finaliza preguntando si desea más información de alguna de las sedes o si desea terminar la comunicación.
     """
@@ -271,6 +272,7 @@ class GenerationModuleLlama:
     - Si solo hay una sede, preséntala directamente, sin mencionar que no hay más.
     - NO inventes nombres de sedes ni menciones genéricas como "otras sedes disponibles".
     - La respuesta debe ser breve (3 a 6 líneas).
+    - Tu respuesta debes escribirla solamente con letras, sin guiones o identificador, los números expresados con palabras.
     - Finaliza siempre preguntando si desea más información de alguna de las sedes o si desea terminar la comunicación.
     """
     INIT_PROMPT_LLAMA = """
@@ -292,6 +294,7 @@ class GenerationModuleLlama:
                         - NO inventes nombres de sedes ni menciones genéricas como "otras sedes disponibles".
                         - Finaliza siempre preguntando si desea más información de alguna de las sedes(como horarios o ubicación exacta).
                         - La respuesta debe ser breve (3 a 6 líneas).
+                        - Tu respuesta debes escribirla solamente con letras, sin guiones o identificador, los números expresados con palabras.
                         - Al mencionar las sedes, menciona el nombre y ubicacion corta, no incluyas el id o guiones.
                         """
 
@@ -492,15 +495,17 @@ class FollowUpDetector:
 
     def detect_exit_intent(self, user_input: str) -> bool:
         # heurístico rápido
-        exit_patterns = [r"\b(terminar|adiós|eso es todo|cortar|no tengo más preguntas|terminar|es todo)\b"]
+        exit_patterns = [r"\b(terminar|adiós|eso es todo|cortar|no tengo más preguntas|terminar|es todo|seria todo)\b"]
         if any(re.search(p, user_input.lower()) for p in exit_patterns):
             return True
 
         # comparación semántica
         ejemplos_salida = [
-            "ya terminé", "eso es todo", "puedes cortar la llamada", "terminamos", "no tengo mas preguntas", "adiós"
+            "ya terminé", "eso es todo", "puedes cortar la llamada", "terminamos", "no tengo mas preguntas", "adiós",
+            "es todo", "seria todo",
         ]
         emb_user = self.model.embeddings.embed_query(user_input)
         emb_refs = [self.model.embeddings.embed_query(e) for e in ejemplos_salida]
         scores = [cosine_similarity([emb_user], [e])[0][0] for e in emb_refs]
-        return max(scores) >= 0.68  # umbral ajustable
+        print("[DEBUG] Nivel de deteccion de finalizacion: ", scores)
+        return max(scores) >= 0.58  # umbral ajustable
