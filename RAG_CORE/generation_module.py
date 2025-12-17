@@ -236,8 +236,9 @@ class GenerationModuleLlama:
             print(f"[DEBUG] Error al validar continuidad de contexto: {e}")
             return False
 
+
     DETAILS_PROMPT = """
-    Eres un asistente telefónico en español mexicano de Medical Life. 
+    Eres un asistente telefónico estrictamente en español mexicano de Medical Life. 
     El usuario ha pedido detalles de una unidad médica específica.
 
     Responde usando SOLO la información del contexto. No inventes.
@@ -258,7 +259,7 @@ class GenerationModuleLlama:
     """
 
     CONTINUOUS_PROMPT_LLAMA = """
-    Eres un asistente telefónico en español mexicano de Medical Life, empresa proveedora de servicios médicos.
+    Eres un asistente telefónico estrictamente en español mexicano de Medical Life, empresa proveedora de servicios médicos.
     Responde SOLO usando el CONTEXTO otorgado. No inventes nada que no esté en el contexto.
     Si falta información, di: "No tenemos información de lo que estás pidiendo".
 
@@ -276,7 +277,7 @@ class GenerationModuleLlama:
     - Finaliza siempre preguntando si desea más información de alguna de las sedes o si desea terminar la comunicación.
     """
     INIT_PROMPT_LLAMA = """
-                        Eres un asistente telefónico en español mexicano llamado CORA, de Medical Life, empresa proveedora de servicios médicos.
+                        Eres un asistente telefónico estrictamente en español mexicano llamado CORA, de Medical Life, empresa proveedora de servicios médicos.
                         Responde SOLO usando el CONTEXTO otorgado. No inventes nada que no esté en el contexto.
                         Si falta información, di: "No tenemos información de lo que estás pidiendo".
 
@@ -289,7 +290,7 @@ class GenerationModuleLlama:
                         Instrucciones de estilo:
                         - No incluyas presentación o tu nombre, ya que es un seguimiento de la misma conversación.
                         - Responde solamente en español.
-                        - Si hay varias sedes, enuméralas como lista (máximo 4).
+                        - Si hay varias sedes, enuméralas como lista (máximo 4) con nombre, municipio, estado y el servicio que se pidió.
                         - Si solo hay una sede, preséntala directamente, sin mencionar que no hay más.
                         - NO inventes nombres de sedes ni menciones genéricas como "otras sedes disponibles".
                         - Finaliza siempre preguntando si desea más información de alguna de las sedes(como horarios o ubicación exacta).
@@ -380,7 +381,7 @@ class ConversationalMemory:
 
 
 class FollowUpDetector:
-    def __init__(self, retrieval=None, threshold=0.50):
+    def __init__(self, retrieval=None, threshold=0.65):
         if retrieval is None:
             self.model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
         else:
@@ -388,6 +389,7 @@ class FollowUpDetector:
         self.threshold = threshold
 
     def is_follow_up(self, user_input: str, memory_turns: list) -> bool:
+        # Follow up semantica
         if not memory_turns:
             return False
 
@@ -422,11 +424,12 @@ class FollowUpDetector:
         return sim >= self.threshold
 
     def is_follow_up_user(self, user_input: str, memory_turns: list) -> bool:
+        # Follow up de intencion
         if not memory_turns:
             return False
 
             # Heurístico básico (puedes dejarlo, pero como fallback)
-        heuristics = [r"\bs[ií]\b", r"\besa\b", r"\bla de\b", r"\bde la\b", r"\besa sede\b"]
+        heuristics = [r"\bs[ií]\b", r"\besa\b", r"\bla de\b", r"\bde la\b", r"\besa sede\b", r"\bmas detalles\b"]
         if any(re.search(h, user_input.lower()) for h in heuristics):
             return True
 
@@ -441,6 +444,8 @@ class FollowUpDetector:
             return False
 
         # Comparar embeddings
+        print(f"[DEBUG] LAST QUERY: {last_user_query}")
+        print(f"[DEBUG] USER QUERY: {user_input}")
         emb_current = self.model.embeddings.embed_query(user_input)
         emb_previous = self.model.embeddings.embed_query(last_user_query)
         sim = cosine_similarity([emb_current], [emb_previous])[0][0]
@@ -449,7 +454,7 @@ class FollowUpDetector:
 
         return sim >= self.threshold  # threshold por defecto: 0.65–0.75
 
-    def match_sucursal_from_input(self, user_input: str, docs: list, threshold: float = 0.72, top_k: int = 1):
+    def match_sucursal_from_input(self, user_input: str, docs: list, threshold: float = 0.65, top_k: int = 1):
         """
         Dada una entrada del usuario y una lista de documentos (sucursales),
         devuelve la(s) sucursal(es) que más se parezcan con base en embeddings.

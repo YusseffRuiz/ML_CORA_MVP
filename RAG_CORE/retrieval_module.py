@@ -574,9 +574,9 @@ class RetrievalModule:
         """
         def get_line_output(meta):
             line = (
-                f"• {meta['id']} — {meta['municipio']}, {meta['estado']} | {meta['direccion_corta']} | "
-                f"Horario: {meta['horarios_texto']} | Tel: {meta['telefono']} | "
-                f"Horario de Comidas: {meta['comidas']} | "
+                f"• {meta.get('id', 'N/A')} — {meta.get('municipio', 'N/A')}, {meta.get('estado', 'N/A')} | "
+                f"{meta.get('direccion_corta', 'N/A')} | Horario: {meta.get('horarios_texto', 'No disponible')} "
+                f"| Tel: {meta.get('telefono', 'No disponible')} | Horario de Comidas: {meta['comidas']} | "
                 f"Servicios: {', '.join(meta.get('servicios_lista', [])) or 'Consultar en sede'} | "
                 f"Consulta: {meta.get('costo_consulta') or 'Consultar en sede'} | "
                 f"Medicamentos: {meta.get('costo_medicamentos') or 'Consultar en sede'} "
@@ -605,7 +605,7 @@ class RetrievalModule:
 
         if memoria:
             last_docs = memoria.get_last_docs()
-            print(last_docs)
+            # print(last_docs)
             if last_docs:
                 rescored = _rescore_docs_with_query(self.embeddings, normalize_query_e5(query), last_docs)
                 rescored_sorted = sorted(rescored, key=lambda x: x[1], reverse=True)

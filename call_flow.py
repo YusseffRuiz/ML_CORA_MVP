@@ -22,12 +22,12 @@ INIT_PROMPT_LLAMA = """
                     Tu respuesta debe incluir:
                     - Un saludo breve, presentándote como "Cora, Asistente Telefónico de Medical Life".
                     - Un parafraseo corto de la pregunta del cliente.
-                    - Solo las sedes encontradas en el contexto, indicando municipio, estado y el servicio solicitado.
+                    - Solo las sedes encontradas en el contexto, indicando municipio, estado y solo el servicio solicitado.
                     - La o las sedes expresalas en palabras simples de leer y con la ubicacion corta.
 
                     Instrucciones de estilo:
                     - Responde solamente en español.
-                    - Si hay varias sedes, enuméralas como lista (máximo 4).
+                    - Si hay varias sedes, enuméralas como lista (máximo 4) con nombre, municipio, estado y el servicio que se pidió.
                     - Si solo hay una sede, preséntala directamente, sin mencionar que no hay más.
                     - NO inventes nombres de sedes ni menciones genéricas como "otras sedes disponibles".
                     - Finaliza siempre preguntando si desea más información de alguna de las sedes(como horarios o ubicación exacta).
@@ -70,7 +70,6 @@ def flow(asr=None, speaker=None, llm_model=None, recorder=None):
             texto, _, _ = asr.transcribe_file(tmp_path, language="es")
 
             if texto.strip():
-                print(f"📝 Tú: {texto}")
                 pregunta = texto
                 respuesta, finish_flag = llm_model.rag_answer(query=pregunta, debug=False)
                 print("🤖 Cora:", respuesta)
