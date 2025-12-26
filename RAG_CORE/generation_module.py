@@ -1,3 +1,4 @@
+from llama_cpp import Llama
 import re
 
 import tiktoken
@@ -5,7 +6,7 @@ import torch
 from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 # from langchain_community.llms import CTransformers
-from llama_cpp import Llama
+
 import os, time
 from sentence_transformers import SentenceTransformer
 from sentence_transformers.util import cos_sim
@@ -39,15 +40,16 @@ class GenerationModuleLlama:
         :param model_name: model name or model path
         :param device: if gpu his available
         """
+        self.debug = None
         self.memoria = None
         self.initial_prompt = None
         self.retrieval = retrieval
-        self.follow_up_model = FollowUpDetector(retrieval=self.retrieval, threshold=0.5)
+        self.follow_up_model = None
 
         # Verificar GPU
         cuda_available = True if device == "cuda" else False
 
-        print("Initializing Model ...")
+        print("Initializing Model ...", model_name, "\nExists: ", os.path.exists(model_name))
         print("CUDA available:", cuda_available)
         gpu_layers = 20
         max_tokens = 16572
@@ -69,13 +71,16 @@ class GenerationModuleLlama:
                          # The number of CPU threads to use, tailor to your system and the resulting performance
                          n_gpu_layers=gpu_layers,
                          temperature=config["temperature"],
-                         use_mlock=True,
+                         use_mlock=False,
+                         use_mmap=True,
                          verbose=False
                          )
         self.memoria = ConversationalMemory(max_tokens=max_tokens)
         print(f"Module Created!, gpu layers: {gpu_layers}.")
-    def initialize(self, initial_prompt):
+    def initialize(self, initial_prompt, debug=False):
         self.initial_prompt = initial_prompt
+        self.debug = debug
+        self.follow_up_model = FollowUpDetector(retrieval=self.retrieval, threshold=0.5, debug=debug)
 
 
     def build_llama2_prompt(self, context: str, question: str, historial: str = None) -> str:
@@ -96,7 +101,7 @@ class GenerationModuleLlama:
 
 
     ## Función principal de respuestas interpretadas por el sistema RAG
-    def rag_answer(self, query: str, debug : bool = False):
+    def rag_answer(self, query: str):
         """
         Regresa la respuesta del sistema LLM y un bool indicando si ya termino la interaccion (True) o si continua (False).
         """
@@ -106,7 +111,7 @@ class GenerationModuleLlama:
         # 7. Detección simple de fin de sesión
         if self.follow_up_model.detect_exit_intent(query):
             self.memoria.clear()
-            return "🤖Ha sido un gusto ayudarte. ¡Que tengas buen día! ¡Adiós!", True
+            return "Ha sido un gusto ayudarte. ¡Que tengas buen día! ¡Adiós!", True
 
         docs = self.memoria.get_last_docs() # revisamos si hay informacion previa
         used_cached_docs = docs is not None and len(docs) > 0
@@ -114,18 +119,18 @@ class GenerationModuleLlama:
         follow_up = self.follow_up_model.is_follow_up(query, self.memoria.get_recent_turns())
         # Verificación adicional: ¿el usuario cambió de intención a pesar de ser follow-up?
         if follow_up and not self.follow_up_model.is_follow_up_user(query, self.memoria.get_recent_turns()):
-            if debug:
+            if self.debug:
                 print("[DEBUG] Cambio de intención detectado. Se reinicia contexto y búsqueda.")
             follow_up = False  # Forzamos modo nueva búsqueda
             docs = []  # Limpiamos docs previos para no arrastrar contexto viejo
-        if debug:
+        if self.debug:
             print("Follow up: ", follow_up)
 
         if not follow_up:
             # Validamos si el usuario sigue en la misma intención, aunque no sea un follow-up directo
             if self.should_continue_context(query, used_cached_docs):
                 follow_up = True
-                if debug:
+                if self.debug:
                     print(
                         "[DEBUG] No se detectó follow-up directo, pero sí continuidad semántica. Se mantiene contexto.")
             else:
@@ -137,14 +142,14 @@ class GenerationModuleLlama:
                     return "No encontré información suficiente en la base.", False
 
                 self.memoria.set_last_docs(docs)
-                if debug:
+                if self.debug:
                     print("[DEBUG] Nueva búsqueda realizada, se guardan nuevos documentos.")
                 self.initial_prompt = self.INIT_PROMPT_LLAMA
 
         else:
             # 4. En caso de follow-up, usar los documentos previos
             if not used_cached_docs:
-                if debug:
+                if self.debug:
                     print("[DEBUG] Follow-up detectado, pero no hay documentos previos.")
                 self.memoria.add_turn("user", query)
                 self.memoria.add_turn("assistant", "No tengo contexto previo suficiente.")
@@ -155,7 +160,7 @@ class GenerationModuleLlama:
                 docs = [doc for doc, _ in matches]
                 self.memoria.set_last_docs(docs)
                 self.initial_prompt = self.DETAILS_PROMPT
-                if debug:
+                if self.debug:
                     print(f"[DEBUG] Se detectaron {len(matches)} coincidencias por follow-up:")
                     for doc in docs:
                         nombre = doc.metadata.get("nombre_oficial", "Sin nombre")
@@ -165,17 +170,17 @@ class GenerationModuleLlama:
             else:
                 # Solo considerar cambio de intención si NO hubo match
                 is_same_topic = self.follow_up_model.is_follow_up_user(query, self.memoria.get_recent_turns())
-                if debug:
+                if self.debug:
                     print(f"[DEBUG] Similitud semántica entre queries: {is_same_topic}")
                 if not is_same_topic:
-                    if debug:
+                    if self.debug:
                         print("[DEBUG] Cambio de intención detectado. Se reinicia contexto y búsqueda.")
                     follow_up = False
                     docs = []
                     self.memoria.set_last_docs([])
                 else:
                     self.initial_prompt = self.CONTINUOUS_PROMPT_LLAMA
-                    if debug:
+                    if self.debug:
                         print("[DEBUG] Follow-up válido sin coincidencia específica. Se mantiene el contexto actual.")
 
         context = build_context_from_docs(docs, full=follow_up)
@@ -188,7 +193,7 @@ class GenerationModuleLlama:
         # Armado de prompt
         prompt_value = self.build_llama2_prompt(context=context, question=query, historial=historial)
 
-        if debug:
+        if self.debug:
             print("Finished Context, tokens number: ", count_tokens(prompt_value))
 
         # Generation
@@ -202,12 +207,8 @@ class GenerationModuleLlama:
         )
         t1 = time.perf_counter()
 
-        # Actualizar memoria
-        self.memoria.add_turn("user", query)
-        self.memoria.add_turn("assistant", out)
-
         ## Debugging
-        if debug:
+        if self.debug:
             print("Finished invoke, time: ", t1 - t0, " s")
             print("Prompt completo:\n", prompt_value)
             # print("Respuesta tokens:", len(out["choices"][0]["text"].split()))
@@ -218,6 +219,9 @@ class GenerationModuleLlama:
         except Exception as e:
             print(f"[ERROR] No se pudo extraer texto de la salida del modelo: {e}")
             out_text = resp.get("answer", "") or str(out)  # último recurso
+        # Actualizar memoria
+        self.memoria.add_turn("user", query)
+        self.memoria.add_turn("assistant", out_text)
 
         return out_text, False
 
@@ -243,11 +247,11 @@ class GenerationModuleLlama:
 
     Responde usando SOLO la información del contexto. No inventes.
     
-    Incluye claramente:
-    - Nombre oficial
-    - Dirección
-    - Horarios
-    - Teléfonos
+    Incluye claramente cada uno de los siguientes campos de la manera que se pide:
+    - Nombre oficial de la sede sin guiones.
+    - Dirección sin abreviaciones, interpresa acotaciones como col siendo colonia o No siendo número.
+    - Horarios expresando los días de la semana sin abreviaciones, tal como L es Lunes, V es viernes y las horas exprésalas en palabras.
+    - Teléfonos expresados con palabras explícitas de los números.
     - Servicios
     - Información adicional si existe
 
@@ -381,12 +385,13 @@ class ConversationalMemory:
 
 
 class FollowUpDetector:
-    def __init__(self, retrieval=None, threshold=0.65):
+    def __init__(self, retrieval=None, threshold=0.65, debug=True):
         if retrieval is None:
             self.model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
         else:
             self.model = retrieval
         self.threshold = threshold
+        self.debug = debug
 
     def is_follow_up(self, user_input: str, memory_turns: list) -> bool:
         # Follow up semantica
@@ -444,13 +449,14 @@ class FollowUpDetector:
             return False
 
         # Comparar embeddings
-        print(f"[DEBUG] LAST QUERY: {last_user_query}")
-        print(f"[DEBUG] USER QUERY: {user_input}")
+        if self.debug:
+            print(f"[DEBUG] LAST QUERY: {last_user_query}")
+            print(f"[DEBUG] USER QUERY: {user_input}")
         emb_current = self.model.embeddings.embed_query(user_input)
         emb_previous = self.model.embeddings.embed_query(last_user_query)
         sim = cosine_similarity([emb_current], [emb_previous])[0][0]
-
-        print(f"[DEBUG] Similitud semántica entre queries: {sim:.3f}")
+        if self.debug:
+            print(f"[DEBUG] Similitud semántica entre queries: {sim:.3f}")
 
         return sim >= self.threshold  # threshold por defecto: 0.65–0.75
 
@@ -512,5 +518,6 @@ class FollowUpDetector:
         emb_user = self.model.embeddings.embed_query(user_input)
         emb_refs = [self.model.embeddings.embed_query(e) for e in ejemplos_salida]
         scores = [cosine_similarity([emb_user], [e])[0][0] for e in emb_refs]
-        print("[DEBUG] Nivel de deteccion de finalizacion: ", scores)
+        if self.debug:
+            print("[DEBUG] Nivel de deteccion de finalizacion: ", scores)
         return max(scores) >= 0.58  # umbral ajustable

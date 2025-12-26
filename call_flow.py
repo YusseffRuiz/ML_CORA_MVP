@@ -47,44 +47,48 @@ VECTOR_MODEL_NAME = 'jinaai/jina-embeddings-v2-base-es'
 
 #  Voz de saludo
 def play_start_sound(speaker=None):
-    speaker.speak("¡Hola! Mi nombre es Cora, soy el asistente de Medical Life para resolver tus dudas y es un placer atender tu llamada."
+    speaker.speak("¡Hola! Mi nombre es Cora, soy el asistente de Medical Laif para resolver tus dudas y es un placer atender tu llamada."
                   "Dime, ¿tienes alguna duda sobre un servicio o localización de algún centro?")
+
+def receive_question(asr=None, recorder = None):
+    # 1. Grabar hasta detectar silencio
+    if recorder is not None:
+        raw_audio = recorder.record_until_silence()
+
+        if raw_audio is None or raw_audio.size == 0:
+            print("No se detectó nada, esperando...")
+            return None
+
+        # 2. Guardar audio temporalmente
+        tmp_path = recorder.save_audio(raw_audio)
+
+        # 3. Transcribir
+        pregunta, _, _ = asr.transcribe_file(tmp_path, language="es")
+        os.remove(tmp_path)
+    else:
+        pregunta = input("👤 Usuario: ").strip()
+    return pregunta
 
 def flow(asr=None, speaker=None, llm_model=None, recorder=None):
     if speaker is not None:
         play_start_sound(speaker=speaker)
     while True:
         try:
-            # 1. Grabar hasta detectar silencio
-            raw_audio = recorder.record_until_silence()
+           pregunta = receive_question(asr=asr, recorder=recorder)
+           if pregunta.strip():
+               respuesta, finish_flag = llm_model.rag_answer(query=pregunta)
+               print("🤖 Cora:", respuesta)
+               if speaker is not None:
+                   speaker.speak(respuesta)
 
-            if raw_audio is None or raw_audio.size==0:
-                print("No se detectó nada, esperando...")
-                continue
+               print("-" * 50)
 
-            # 2. Guardar audio temporalmente
-            tmp_path = recorder.save_audio(raw_audio)
-
-
-            # 3. Transcribir
-            texto, _, _ = asr.transcribe_file(tmp_path, language="es")
-
-            if texto.strip():
-                pregunta = texto
-                respuesta, finish_flag = llm_model.rag_answer(query=pregunta, debug=False)
-                print("🤖 Cora:", respuesta)
-                if speaker is not None:
-                    speaker.speak(respuesta)
-
-                print("-" * 50)
-                os.remove(tmp_path)
-
-                # Esperar nueva pregunta
-                if "adios" in respuesta.lower() or finish_flag:
-                    break
-            else:
-                print("😶 No se entendió lo que dijiste.")
-                speaker.speak("No entendí, ¿podrías repetirme tu pregunta? ")
+               # Esperar nueva pregunta
+               if "adios" in respuesta.lower() or finish_flag:
+                   break
+           else:
+               print("😶 No se entendió lo que dijiste.")
+               speaker.speak("No entendí, ¿podrías repetirme tu pregunta? ")
 
         except KeyboardInterrupt:
             print("\n👋 Conversación terminada.")
@@ -106,15 +110,17 @@ def main():
     """
 
     llm_module = GenerationModuleLlama(LLM_MODEL_FILE, retrieval=retrieval_module)
-    llm_module.initialize(initial_prompt=INIT_PROMPT_LLAMA)
+    llm_module.initialize(initial_prompt=INIT_PROMPT_LLAMA, debug=True)
 
     """
     Audio Initialization
     """
-    speaker = Speaker()
+    speaker = Speaker(engine="KOKORO")
+    print("Speaker Initialized")
     asr = AsrEngine(model_size="medium", device="cuda")
+    print("ASR Initialized")
     recorder = AudioRecorder()
-
+    print("Recorder Initialized")
     flow(asr=asr, speaker=speaker, llm_model=llm_module, recorder=recorder)
 
 def test_mic():
