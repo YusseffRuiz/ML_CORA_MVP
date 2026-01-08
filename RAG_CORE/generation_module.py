@@ -1,17 +1,14 @@
-from llama_cpp import Llama
 import re
 
 import tiktoken
-import torch
+# import torch
 from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 # from langchain_community.llms import CTransformers
 
 import os, time
 from sentence_transformers import SentenceTransformer
-from sentence_transformers.util import cos_sim
 from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
 
 #################################Augmentation and Generation ##########################
 # Planteamiento del Modelo de LLM
@@ -35,7 +32,7 @@ def count_tokens(text: str) -> int:
 
 
 class GenerationModuleLlama:
-    def __init__(self, model_name, retrieval, device="cuda" if torch.cuda.is_available() else "cpu", configFile = None):
+    def __init__(self, llm_model):# , device="cuda" if torch.cuda.is_available() else "cpu", configFile = None):
         """
         :param model_name: model name or model path
         :param device: if gpu his available
@@ -43,42 +40,34 @@ class GenerationModuleLlama:
         self.debug = None
         self.memoria = None
         self.initial_prompt = None
-        self.retrieval = retrieval
+        self.retrieval = None
         self.follow_up_model = None
 
         # Verificar GPU
-        cuda_available = True if device == "cuda" else False
+        # cuda_available = True if device == "cuda" else False
+        #
+        # # print("Initializing Model ...", model_name, "\nExists: ", os.path.exists(model_name))
+        # print("CUDA available:", cuda_available)
+        # gpu_layers = 20
+        max_tokens = 2048
+        # if configFile is None:
+        #     if cuda_available:
+        #         gpu_layers = 0
+        #         config = {'max_new_tokens': 256, 'context_length': 1800, 'temperature': 0.45, "gpu_layers": gpu_layers,
+        #                   "threads": os.cpu_count()}
+        #     else:
+        #         gpu_layers = 0
+        #         config = {'max_new_tokens': 256, 'context_length': 1800, 'temperature': 0.45, "threads": os.cpu_count()}
+        # else:
+        #     config = configFile
 
-        print("Initializing Model ...", model_name, "\nExists: ", os.path.exists(model_name))
-        print("CUDA available:", cuda_available)
-        gpu_layers = 20
-        max_tokens = 16572
-        if configFile is None:
-            if cuda_available:
-                gpu_layers = 20
-                config = {'max_new_tokens': 256, 'context_length': 1800, 'temperature': 0.45, "gpu_layers": gpu_layers,
-                          "threads": os.cpu_count()}
-            else:
-                config = {'max_new_tokens': 256, 'context_length': 1800, 'temperature': 0.45, "threads": os.cpu_count()}
-        else:
-            config = configFile
 
-
-        self.llm_model = Llama(model_path=model_name,
-                         n_ctx=max_tokens,
-                         # The max sequence length to use - note that longer sequence lengths require much more resources
-                         n_threads=config["threads"],
-                         # The number of CPU threads to use, tailor to your system and the resulting performance
-                         n_gpu_layers=gpu_layers,
-                         temperature=config["temperature"],
-                         use_mlock=False,
-                         use_mmap=True,
-                         verbose=False
-                         )
+        self.llm_model = llm_model
         self.memoria = ConversationalMemory(max_tokens=max_tokens)
-        print(f"Module Created!, gpu layers: {gpu_layers}.")
-    def initialize(self, initial_prompt, debug=False):
+        # print(f"Module Created!, gpu layers: {gpu_layers}.")
+    def initialize(self, initial_prompt, retrieval, debug=False):
         self.initial_prompt = initial_prompt
+        self.retrieval = retrieval
         self.debug = debug
         self.follow_up_model = FollowUpDetector(retrieval=self.retrieval, threshold=0.5, debug=debug)
 

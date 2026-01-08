@@ -1,18 +1,6 @@
-import numpy as np
-
-from RAG_CORE.generation_module import GenerationModuleLlama
-
-from RAG_CORE.retrieval_module import RetrievalModule
-from AudioTranscription.ASREngine import AsrEngine
-from AudioTranscription.audio_recording import AudioRecorder
-
-# Importar llaves de uso
-from dotenv import load_dotenv
-from TTS_test import Speaker
+from llama_cpp import Llama
 import os
-import time
-from pydub import AudioSegment
-from pydub.playback import play
+from dotenv import load_dotenv
 
 INIT_PROMPT_LLAMA = """
                     Eres un asistente telefónico en español mexicano de Medical Life, empresa proveedora de servicios médicos.
@@ -43,6 +31,37 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 MEDICAL_EXTENDED = "Documents/medical_life_real.xlsx"
 
 VECTOR_MODEL_NAME = 'jinaai/jina-embeddings-v2-base-es'
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ["OMP_NUM_THREADS"] = str(os.cpu_count())
+gpu_layers = 20
+config = {'max_new_tokens': 256, 'context_length': 1800, 'temperature': 0.45, "gpu_layers": gpu_layers,
+                          "threads": os.cpu_count()}
+llm_model = Llama(model_path=LLM_MODEL_FILE,
+                         n_ctx=config["context_length"],
+                         # The max sequence length to use - note that longer sequence lengths require much more resources
+                         n_threads=config["threads"],
+                         # The number of CPU threads to use, tailor to your system and the resulting performance
+                         n_gpu_layers=gpu_layers,
+                         temperature=config["temperature"],
+                         use_mlock=False,
+                         use_mmap=True,
+                         verbose=False
+                         )
+
+from RAG_CORE.generation_module import GenerationModuleLlama
+from RAG_CORE.retrieval_module import RetrievalModule
+from AudioTranscription.ASREngine import AsrEngine
+from AudioTranscription.audio_recording import AudioRecorder
+
+# Importar llaves de uso
+
+from TTS_test import Speaker
+
+import time
+from pydub import AudioSegment
+from pydub.playback import play
+
 
 
 #  Voz de saludo
@@ -79,8 +98,9 @@ def flow(asr=None, speaker=None, llm_model=None, recorder=None):
                respuesta, finish_flag = llm_model.rag_answer(query=pregunta)
                print("🤖 Cora:", respuesta)
                if speaker is not None:
-                   speaker.speak(respuesta)
-
+                   # speaker.speak(respuesta)
+                    path = speaker.save_dialog(text=respuesta.text)
+                    speaker.speak_from_path(path)
                print("-" * 50)
 
                # Esperar nueva pregunta
@@ -88,7 +108,10 @@ def flow(asr=None, speaker=None, llm_model=None, recorder=None):
                    break
            else:
                print("😶 No se entendió lo que dijiste.")
-               speaker.speak("No entendí, ¿podrías repetirme tu pregunta? ")
+               # speaker.speak("No entendí, ¿podrías repetirme tu pregunta? ")
+               interaction = "No entendí, ¿podrías repetirme tu pregunta? "
+               speaker.save_dialog(text=interaction)
+               speaker.speak_from_path(path)
 
         except KeyboardInterrupt:
             print("\n👋 Conversación terminada.")
@@ -101,16 +124,14 @@ def main():
         print("HF_TOKEN no encontrado")
         exit(0)
 
-
     retrieval_module = RetrievalModule(database_path=MEDICAL_EXTENDED, hf_token=HF_TOKEN, model_name=VECTOR_MODEL_NAME)
     retrieval_module.initialize(load_db=True, path_to_database="kb_faiss_langchain", score_threshold = 0.34, percentile = 0.9)
 
     """
     Augmentation and Generation Portion
     """
-
-    llm_module = GenerationModuleLlama(LLM_MODEL_FILE, retrieval=retrieval_module)
-    llm_module.initialize(initial_prompt=INIT_PROMPT_LLAMA, debug=True)
+    llm_module = GenerationModuleLlama(llm_model)
+    llm_module.initialize(initial_prompt=INIT_PROMPT_LLAMA, retrieval=retrieval_module, debug=True)
 
     """
     Audio Initialization
